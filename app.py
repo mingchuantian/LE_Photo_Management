@@ -8,7 +8,7 @@ import sqlite3
 import threading
 import uuid
 import zipfile
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -78,6 +78,8 @@ class Studio:
         self.media.mkdir(parents=True, exist_ok=True)
         self.database = self.directory / "studio.sqlite3"
         self.local = ThreadPoolExecutor(max_workers=1, thread_name_prefix="local-photo")
+        self.compose_workers = max(1, min(8, int(app.config.get("COMPOSE_WORKERS", 4))))
+        self.composition = ThreadPoolExecutor(max_workers=self.compose_workers, thread_name_prefix="template-photo")
         self.ai = ThreadPoolExecutor(max_workers=2, thread_name_prefix="openai-photo")
         self.schedule_lock = threading.Lock()
         with self.connect() as db:
@@ -192,22 +194,40 @@ class Studio:
         product = self.one("SELECT * FROM products WHERE id=? AND status='ready' AND deleted=0 AND placement_confirmed=1", (product_id,))
         if not product:
             return
+        templates = self.rows("""SELECT t.* FROM templates t WHERE t.deleted=0 AND NOT EXISTS
+            (SELECT 1 FROM composites c WHERE c.product_id=? AND c.template_id=t.id AND c.revision=?)""",
+                              (product_id, product["revision"]))
+        if not templates:
+            return
+        # Crop, scale and rotate once per product revision, not once per template.
         cutout = read_image(self.media / product["cutout"])
-        for template in self.rows("SELECT * FROM templates WHERE deleted=0"):
-            if self.one("SELECT id FROM composites WHERE product_id=? AND template_id=? AND revision=?",
-                        (product_id, template["id"], product["revision"])):
-                continue
-            image, placement = compose(read_image(self.media / template["file"]), cutout, product["size"],
-                                       json.loads(product["alignment"]) if product["alignment"] else None)
-            identifier = uid()
-            relative = f"composites/{identifier}.png"
-            save_image(image, self.media / relative)
-            layer_file = f"composites/{identifier}_product.png"
-            save_image(product_layer(cutout, placement), self.media / layer_file)
-            placement["product_layer"] = layer_file
-            self.write("INSERT OR IGNORE INTO composites VALUES (?,?,?,?,?,?,?,?)",
-                       (identifier, product_id, template["id"], product["revision"], product["size"],
-                        relative, json.dumps(placement), now()))
+        _, placement = compose(Image.new("RGB", CANVAS), cutout, product["size"],
+                               json.loads(product["alignment"]) if product["alignment"] else None)
+        layer = product_layer(cutout, placement)
+        layer_file = f"product_layers/{product_id}_{product['revision']}_{uid()}.png"
+        save_image(layer, self.media / layer_file)
+        placement["product_layer"] = layer_file
+        futures = {self.composition.submit(self.compose_template, product, template, layer, placement): template
+                   for template in templates}
+        failures = []
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as error:
+                failures.append(f"{futures[future]['name']}: {self.safe_error(error)}")
+        if failures:
+            raise ValueError(f"{len(failures)} 个模板合成失败，其他组合已保存。可重试失败项目。" + "\n" + "\n".join(failures[:5]))
+
+    def compose_template(self, product, template, layer, placement):
+        # Each worker owns its canvas; the immutable foreground is read-only.
+        image = read_image(self.media / template["file"])
+        image.alpha_composite(layer)
+        identifier = uid()
+        relative = f"composites/{identifier}.png"
+        save_image(image.convert("RGB"), self.media / relative)
+        self.write("INSERT OR IGNORE INTO composites VALUES (?,?,?,?,?,?,?,?)",
+                   (identifier, product["id"], template["id"], product["revision"], product["size"],
+                    relative, json.dumps(placement), now()))
 
     def foreground(self, composite):
         placement = json.loads(composite["placement"])
@@ -290,7 +310,8 @@ def create_app(config=None):
     app = Flask(__name__)
     app.json.sort_keys = False  # Preserve the five sizes in small → large order.
     app.config.update(DATA_DIR=os.getenv("PHOTO_DATA_DIR", str(ROOT / "data")),
-                      MAX_CONTENT_LENGTH=256 * 1024 * 1024, DISABLE_WORKERS=False)
+                      MAX_CONTENT_LENGTH=256 * 1024 * 1024, DISABLE_WORKERS=False,
+                      COMPOSE_WORKERS=os.getenv("PHOTO_COMPOSE_WORKERS", "4"))
     if config:
         app.config.update(config)
     studio = Studio(app)
@@ -341,6 +362,7 @@ def create_app(config=None):
         return jsonify(products=products, templates=templates, composites=composites,
                        results=results, jobs=jobs, key_ready=bool(load_key(ROOT)),
                        photoroom_ready=bool(load_photoroom_key(ROOT)), removal_provider="photoroom",
+                       compose_workers=studio.compose_workers,
                        sizes=SIZE_WIDTHS, baseline=BASELINE, canvas=CANVAS, settings=SETTINGS, prompt=PROMPT)
 
     def upload(kind):

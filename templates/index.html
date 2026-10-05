@@ -8,6 +8,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%232e493c'/%3E%3Ctext x='10' y='43' fill='%23fff' font-size='32' font-family='serif'%3ELE%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <script defer src="{{ url_for('static', filename='app.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='combinations.js') }}"></script>
   <script defer src="{{ url_for('static', filename='placement.js') }}"></script>
 </head>
 <body>
@@ -50,9 +51,9 @@
           <div id="size-toolbar" class="size-toolbar" hidden><span>已选 <strong id="selected-product-count">0</strong> 个商品</span><div class="size-segments" id="batch-sizes" aria-label="批量设置包包尺寸"></div><button class="secondary small" id="align-next">依次调整摆放</button><button class="quiet" id="download-cutouts"><svg><use href="#i-download"/></svg>下载透明图</button></div>
         </section>
         <section class="previews-panel">
-          <div class="section-heading"><div><h2>已确认的模板组合 <span id="preview-count" class="count">0</span></h2><p id="preview-description">使用已确认的位置与旋转，套用所有背景模板；多选后交给 ChatGPT。</p></div><button class="text-button" data-view="templates">管理背景模板 <svg><use href="#i-arrow"/></svg></button></div>
-          <div class="gallery-toolbar"><div class="toolbar-left"><button class="secondary small" id="select-composites">全选预览</button><button class="quiet small" id="clear-composites">取消选择</button><span id="scope-label"></span></div><div class="toolbar-right"><label class="sr-only" for="preview-filter">预览状态</label><select id="preview-filter"><option value="all">所有预览</option><option value="new">尚未生成</option><option value="done">已有成品</option></select><label class="sr-only" for="preview-search">搜索商品或模板</label><input id="preview-search" type="search" placeholder="搜索商品或背景…"></div></div>
-          <div id="composite-grid" class="image-grid"></div>
+          <div class="section-heading"><div><h2>已确认的模板组合 <span id="preview-count" class="count">0</span></h2><p id="preview-description">每个商品一个入口，打开弹窗挑选背景；不同商品的选择会一起保留。</p></div><button class="text-button" data-view="templates">管理背景模板 <svg><use href="#i-arrow"/></svg></button></div>
+          <div class="gallery-toolbar"><div class="toolbar-left"><button class="quiet small" id="clear-composites">取消全部组合选择</button><span id="scope-label"></span></div><div class="toolbar-right"><label class="sr-only" for="preview-filter">预览状态</label><select id="preview-filter"><option value="all">所有组合</option><option value="new">尚未生成</option><option value="done">已有成品</option></select><label class="sr-only" for="preview-search">搜索组合商品</label><input id="preview-search" type="search" placeholder="搜索商品…"></div></div>
+          <div id="composite-grid" class="combination-groups"></div>
           <div id="composite-empty" class="empty-state"></div>
         </section>
       </section>
@@ -78,6 +79,17 @@
   <input id="products-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
   <input id="templates-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
   <div id="toast-container" aria-live="polite"></div>
+
+  <dialog id="combinations-dialog" class="combinations-dialog">
+    <div class="dialog-header"><div><span class="eyebrow">CHOOSE THE SCENES</span><h2 id="combinations-title">挑选背景组合</h2><p id="combinations-progress" class="muted"></p></div><button class="icon-button" data-close="combinations-dialog" aria-label="关闭组合选择"><svg><use href="#i-close"/></svg></button></div>
+    <div class="combinations-toolbar">
+      <label class="sr-only" for="combinations-product">切换组合商品</label><select id="combinations-product"></select>
+      <div><button class="secondary small" id="combinations-select-all">全选当前筛选</button><button class="quiet small" id="combinations-clear">取消本商品选择</button></div>
+      <div class="combinations-search"><label class="sr-only" for="combinations-filter">筛选背景组合</label><select id="combinations-filter"><option value="all">所有组合</option><option value="new">尚未生成</option><option value="done">已有成品</option></select><label class="sr-only" for="combinations-search">搜索背景模板</label><input id="combinations-search" type="search" placeholder="搜索背景模板…"></div>
+    </div>
+    <div class="combinations-gallery"><div id="combinations-grid" class="image-grid"></div><div id="combinations-empty" class="empty-state" hidden></div></div>
+    <div class="combinations-footer"><div><strong id="combinations-selected">本商品已选 0 张</strong><small id="combinations-total">选择会保留，可切换其他商品</small></div><div class="combination-actions"><label for="combinations-n">每张生成</label><select id="combinations-n"></select><button class="primary" id="combinations-generate" disabled>ChatGPT 处理本商品</button><button class="secondary" data-close="combinations-dialog">完成选择</button></div></div>
+  </dialog>
 
   <dialog id="placement-dialog" class="placement-dialog">
     <div class="dialog-header"><div><span class="eyebrow">02 · FIND THE RIGHT POSITION</span><h2 id="placement-title">调整商品摆放</h2><p class="muted">先在一个背景上确认，再套用到所有模板。</p></div><button class="icon-button" data-close="placement-dialog" aria-label="关闭摆放预览"><svg><use href="#i-close"/></svg></button></div>

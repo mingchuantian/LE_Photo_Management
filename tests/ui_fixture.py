@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw
 from app import create_app
 from waitress import serve
 
-directory = Path(__file__).resolve().parents[1] / ".test-artifacts" / "ui-staged"
+directory = Path(__file__).resolve().parents[1] / ".test-artifacts" / "ui-grouped"
 
 
 def bag(color):
@@ -35,7 +35,7 @@ studio = app.extensions["studio"]
 client = app.test_client()
 if not studio.rows("SELECT id FROM products"):
     backgrounds = []
-    for i, color in enumerate(["#e9e4d7", "#dce4d5", "#e6d9ce", "#e1e3dd", "#dbdfcb", "#e5dcd3"]):
+    for i, color in enumerate(["#e9e4d7", "#dce4d5", "#e6d9ce", "#e1e3dd", "#dbdfcb", "#e5dcd3"] * 6):
         image = Image.new("RGB", (1080, 1350), color)
         draw = ImageDraw.Draw(image)
         draw.rectangle((0, 945, 1080, 1350), fill=["#d9c8ae", "#c7cbbb", "#d5bdae"][i % 3])
@@ -51,11 +51,11 @@ if not studio.rows("SELECT id FROM products"):
         original.alpha_composite(bag(color))
         response = client.post("/api/products", data={"files": (io.BytesIO(encode(original)),name)})
         studio.run_job(response.json["job_id"])
-    product = client.get("/api/state").json["products"][0]
-    draft = client.get(f"/api/products/{product['id']}/alignment").json
-    response = client.post(f"/api/products/{product['id']}/confirm-placement", json={
-        "revision": draft["revision"], "template_id": draft["template_id"], "alignment": draft["alignment"]})
-    studio.run_job(response.json["job_id"])
+    for product in client.get("/api/state").json["products"]:
+        draft = client.get(f"/api/products/{product['id']}/alignment").json
+        response = client.post(f"/api/products/{product['id']}/confirm-placement", json={
+            "revision": draft["revision"], "template_id": draft["template_id"], "alignment": draft["alignment"]})
+        studio.run_job(response.json["job_id"])
     composite_ids = [c["id"] for c in studio.rows("SELECT id FROM composites LIMIT 2")]
     response = client.post("/api/generate", json={"ids":composite_ids, "n":3})
     studio.run_job(response.json["job_id"])

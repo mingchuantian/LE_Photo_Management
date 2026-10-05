@@ -33,6 +33,7 @@ def studio_app(tmp_path):
     yield app
     app.extensions["studio"].local.shutdown()
     app.extensions["studio"].ai.shutdown()
+    app.extensions["studio"].composition.shutdown()
 
 
 def upload(client, kind, count=1, size=(401, 498)):
@@ -197,6 +198,7 @@ def test_restart_does_not_reissue_ai_requests(studio_app):
     finally:
         second.extensions["studio"].local.shutdown()
         second.extensions["studio"].ai.shutdown()
+        second.extensions["studio"].composition.shutdown()
 
 
 def test_openai_recipe_exact_payload(monkeypatch, tmp_path):
@@ -318,6 +320,7 @@ def test_layout_migration_refreshes_previews_and_restores_existing_results(studi
     finally:
         second.extensions["studio"].local.shutdown()
         second.extensions["studio"].ai.shutdown()
+        second.extensions["studio"].composition.shutdown()
 
 
 def test_staged_workflow_preview_then_confirm_then_all_templates(studio_app):
@@ -434,3 +437,54 @@ def test_photoroom_alpha_one_haze_does_not_shrink_the_actual_product():
     assert cleaned.getpixel((50, 100)) == image.getpixel((50, 100))
     _, placement = compose(Image.new("RGB", CANVAS), cleaned, "大")
     assert placement["resize_to"][0] == 972
+
+
+def test_four_template_workers_prepare_foreground_once_and_retry_only_missing(studio_app, monkeypatch):
+    import threading
+    import app as app_module
+    client = studio_app.test_client()
+    upload(client, "templates", count=8)
+    studio = studio_app.extensions["studio"]
+    studio.run_job(upload(client, "products").json["job_id"])
+    product = client.get("/api/state").json["products"][0]
+    data = client.get(f"/api/products/{product['id']}/alignment").json
+    job = client.post(f"/api/products/{product['id']}/confirm-placement", json={
+        "revision": data["revision"], "template_id": data["template_id"], "alignment": data["alignment"]}).json["job_id"]
+    original = studio.compose_template
+    barrier = threading.Barrier(4, timeout=10)
+    lock = threading.Lock()
+    threads, calls = set(), []
+    broken = studio.rows("SELECT id FROM templates")[0]["id"]
+    def worker(product, template, layer, placement):
+        with lock:
+            threads.add(threading.get_ident()); calls.append(template["id"]); index = len(calls)
+        if index <= 4:
+            barrier.wait()
+        if template["id"] == broken:
+            raise ValueError("one broken template")
+        return original(product, template, layer, placement)
+    monkeypatch.setattr(studio, "compose_template", worker)
+    spy = Mock(wraps=app_module.compose)
+    monkeypatch.setattr(app_module, "compose", spy)
+    studio.run_job(job)
+    assert len(threads) == 4 and len(calls) == 8
+    assert spy.call_count == 1
+    assert studio.one("SELECT status FROM jobs WHERE id=?", (job,))["status"] == "error"
+    rows = studio.rows("SELECT * FROM composites")
+    assert len(rows) == 7
+    assert len({json.loads(c["placement"])["product_layer"] for c in rows}) == 1
+    row = rows[0]
+    template = studio.one("SELECT file FROM templates WHERE id=?", (row["template_id"],))
+    expected, _ = compose(read_image(studio.media / template["file"]), cutout(None), "中", data["alignment"])
+    assert ImageChops.difference(expected.convert("RGB"), read_image(studio.media / row["file"]).convert("RGB")).getbbox() is None
+    calls.clear()
+    def retry_worker(product, template, layer, placement):
+        calls.append(template["id"])
+        return original(product, template, layer, placement)
+    monkeypatch.setattr(studio, "compose_template", retry_worker)
+    retry = client.post(f"/api/jobs/{job}/retry", json={}).json["job_id"]
+    studio.run_job(retry)
+    assert calls == [broken] and len(studio.rows("SELECT id FROM composites")) == 8
+    before = {r["id"] for r in studio.rows("SELECT id FROM composites")}
+    studio.compose_product(product["id"])
+    assert {r["id"] for r in studio.rows("SELECT id FROM composites")} == before

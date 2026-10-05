@@ -32,14 +32,6 @@ function activeComposites() { return state.composites.filter(c => c.active); }
 function busyCompositeIds() {
   return new Set(state.jobs.filter(j=>j.kind==="generate").flatMap(j=>j.items.filter(i=>["queued","running"].includes(i.status)).map(i=>i.ref_id)));
 }
-function visibleComposites() {
-  const filter = $("preview-filter").value, query = $("preview-search").value.toLowerCase().trim();
-  const done = new Set(state.results.map(r=>r.composite_id));
-  return activeComposites().filter(c=>
-    (!selectedProducts.size || selectedProducts.has(c.product_id)) &&
-    (filter === "all" || (filter === "new" ? !done.has(c.id) : done.has(c.id))) &&
-    (!query || `${c.product_name} ${c.template_name}`.toLowerCase().includes(query)));
-}
 function visibleResults() {
   const product = $("result-product").value, query = $("result-search").value.toLowerCase().trim();
   return state.results.filter(r=>(product==="all" || r.product_id===product) &&
@@ -103,33 +95,7 @@ function renderProducts() {
 function empty(element, title, description, action = "", imageIcon = "image") {
   element.innerHTML = `<span class="empty-icon">${icon(imageIcon)}</span><h3>${title}</h3><p>${description}</p>${action}`;
 }
-function renderComposites() {
-  const composites = visibleComposites();
-  const busy = busyCompositeIds();
-  $("preview-count").textContent = composites.length;
-  $("scope-label").textContent = selectedProducts.size ? `显示所选 ${selectedProducts.size} 个商品` : "显示所有商品";
-  $("composite-grid").innerHTML = composites.map(c=> {
-    const results = state.results.filter(r=>r.composite_id===c.id);
-    return `<article class="image-card ${selectedComposites.has(c.id) ? "selected" : ""}">
-      <button class="select-mark" data-select-composite="${c.id}" ${busy.has(c.id) ? "disabled" : ""} aria-label="选择 ${escapeHTML(c.template_name)} 合成图" aria-pressed="${selectedComposites.has(c.id)}">${icon("check")}</button>
-      <span class="card-badge ${busy.has(c.id)?"processing":""}">${busy.has(c.id) ? "光影处理中" : results.length ? `${results.length} 个成品` : c.size + "号"}</span>
-      <button class="image-button" data-inspect-composite="${c.id}"><img loading="lazy" src="${media(c.file,true)}" alt="${escapeHTML(c.product_name)} · ${escapeHTML(c.template_name)}"><span class="image-open">查看图片流程 ↗</span></button>
-      <div class="card-meta"><strong title="${escapeHTML(c.template_name)}">${escapeHTML(c.template_name)}</strong><div class="meta-row"><span title="${escapeHTML(c.product_name)}">${escapeHTML(c.product_name)}</span><span>4:5 · ${c.size}</span></div></div></article>`;
-  }).join("");
-  $("composite-empty").hidden = !!composites.length;
-  if (!state.templates.length) empty($("composite-empty"), "下一步，给包包选个背景", "上传背景模板后，先用一个模板预览商品的位置。", `<button class="secondary small" data-upload="templates">${icon("upload")}上传背景模板</button>`);
-  else if (!state.products.length) empty($("composite-empty"), "背景已就位，等待你的商品", "上传商品照片，Photoroom 抠图后先调整单模板摆放。");
-  else if (state.products.some(p=>p.status==="ready" && !p.placement_confirmed && (!selectedProducts.size || selectedProducts.has(p.id)))) {
-    const product=state.products.find(p=>p.status==="ready" && !p.placement_confirmed && (!selectedProducts.size || selectedProducts.has(p.id)));
-    empty($("composite-empty"), "先摆放好一个，再看全部背景", "在商品卡片点击“预览并调整摆放”，拖动、缩放或旋转包包，确认后生成全部模板组合。", `<button class="primary" data-align-product="${product.id}">开始调整摆放 ${icon("arrow")}</button>`);
-  }
-  else if (state.products.some(p=>["queued","running"].includes(p.status))) empty($("composite-empty"), "Photoroom 正在抠图", "完成后点击商品卡片调整摆放，再确认并套用全部模板。", "", "clock");
-  else if (state.jobs.some(j=>j.kind==="compose" && ["queued","running"].includes(j.status))) empty($("composite-empty"), "正在生成合成预览", "图片会依次出现在这里，稍等片刻。", "", "clock");
-  else if (state.products.every(p=>p.status==="error")) empty($("composite-empty"), "商品需要重新去背景", "点击商品卡片的“重试”，或打开任务记录查看失败原因。", `<button class="secondary small" data-open-jobs>查看任务记录</button>`);
-  else empty($("composite-empty"), "暂时没有符合条件的预览", "尝试更改商品选择、搜索条件，或在任务记录中检查合成任务。", `<button class="secondary small" data-open-jobs>查看任务记录</button>`);
-  $("select-composites").disabled = !composites.some(c=>!busy.has(c.id));
-  renderDock();
-}
+function renderComposites() { renderGroupedComposites(); }
 function renderTemplates() {
   $("template-empty").hidden = !!state.templates.length;
   $("template-grid").innerHTML = state.templates.map(t=>`<article class="image-card"><span class="card-badge">4:5</span><button class="image-button" data-inspect-template="${t.id}"><img loading="lazy" src="${media(t.file,true)}" alt="${escapeHTML(t.name)}"><span class="image-open">查看模板 ↗</span></button><div class="card-meta"><strong title="${escapeHTML(t.name)}">${escapeHTML(t.name)}</strong><div class="meta-row"><span>1080 × 1350</span></div></div><button class="template-delete" data-delete-template="${t.id}" aria-label="移除 ${escapeHTML(t.name)}">${icon("trash")}</button></article>`).join("");
@@ -155,6 +121,7 @@ function renderDock() {
   $("download-composites").disabled = !selectedComposites.size;
   $("selected-result-count").textContent = selectedResults.size;
   $("download-results").disabled = !selectedResults.size;
+  if (typeof renderCombinationSelection === "function") renderCombinationSelection();
 }
 function switchView(next) {
   view = next;
@@ -319,7 +286,6 @@ document.addEventListener("drop",e=> {
   e.preventDefault(); if(!e.target.closest("[data-drop]") && e.dataTransfer.files.length) uploadFiles(view==="templates" ? "templates" : "products",[...e.dataTransfer.files]);
 });
 $("select-products").onclick=()=> { if(selectedProducts.size===state.products.length) selectedProducts.clear(); else selectVisible(selectedProducts,state.products); renderProducts(); renderComposites(); };
-$("select-composites").onclick=()=> { const busy=busyCompositeIds(); selectVisible(selectedComposites,visibleComposites().filter(c=>!busy.has(c.id))); renderComposites(); };
 $("clear-composites").onclick=()=> { selectedComposites.clear(); renderComposites(); };
 $("select-results").onclick=()=> { selectVisible(selectedResults,visibleResults()); renderResults(); };
 $("clear-results").onclick=()=> { selectedResults.clear(); renderResults(); };
@@ -328,9 +294,9 @@ $("result-product").onchange=renderResults; $("result-search").oninput=renderRes
 $("generation-n").innerHTML=Array.from({length:10},(_,i)=>`<option value="${i+1}">${i+1}</option>`).join("");
 $("generation-n").value="3";
 $("generation-n").onchange=renderDock;
-$("generate-button").onclick=async()=> {
+async function submitGeneration(requested) {
   if(submitting) return;
-  const busy=busyCompositeIds(), identifiers=[...selectedComposites].filter(id=>!busy.has(id));
+  const busy=busyCompositeIds(), identifiers=[...requested].filter(id=>!busy.has(id));
   if(!identifiers.length) return;
   submitting=true; renderDock();
   try {
@@ -340,7 +306,8 @@ $("generate-button").onclick=async()=> {
     await refresh(true);
   } catch(error) { toast(error.message,true); }
   finally { submitting=false; renderDock(); }
-};
+}
+$("generate-button").onclick=()=>submitGeneration([...selectedComposites]);
 $("download-results").onclick=()=>downloadBatch("results",[...selectedResults],$("download-results"));
 $("download-composites").onclick=()=>downloadBatch("composites",[...selectedComposites],$("download-composites"));
 $("download-cutouts").onclick=()=>downloadBatch("cutouts",[...selectedProducts],$("download-cutouts"));
