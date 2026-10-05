@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f5f1">
+  <title>LE · 商品图工作室</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%232e493c'/%3E%3Ctext x='10' y='43' fill='%23fff' font-size='32' font-family='serif'%3ELE%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script defer src="{{ url_for('static', filename='app.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='placement.js') }}"></script>
+</head>
+<body>
+  <svg class="svg-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 6-6 4 4 3-3 5 5"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z"/><path d="m20 1 .8 2.2L23 4l-2.2.8L20 7l-.8-2.2L17 4l2.2-.8Z"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v13m-5-5 5 5 5-5M4 17v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-bag" viewBox="0 0 24 24"><path d="M5 8h14l2 13H3ZM8 9V6a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  </defs></svg>
+
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="LE 商品图工作室"><span class="brand-monogram">LE<span>✳</span></span><div>PHOTO STUDIO<small>商品图工作室</small></div></a>
+    <div class="nav-caption">你的工作空间</div>
+    <nav aria-label="主导航">
+      <button class="nav-item active" data-view="workspace"><svg><use href="#i-grid"/></svg>批量工作台<span id="nav-products">0</span></button>
+      <button class="nav-item" data-view="templates"><svg><use href="#i-image"/></svg>背景模板<span id="nav-templates">0</span></button>
+      <button class="nav-item" data-view="results"><svg><use href="#i-spark"/></svg>成品图库<span id="nav-results">0</span></button>
+    </nav>
+    <div class="sidebar-note"><div class="ratio-art"><span>4:5</span></div><strong>为每一个包，找到好背景。</strong><p>从原始照片到自然的商品图，<br>在一个工作空间完成。</p><span class="format-chip">1080 × 1350 · PNG</span></div>
+    <div class="sidebar-bottom"><span class="status-dot"></span><span id="connection">本地工作空间</span><button id="settings-button" title="查看生成设置">设置</button></div>
+  </aside>
+
+  <div class="app-body">
+    <header class="topbar"><div><span class="breadcrumb">工作空间</span><span class="slash">/</span><span id="breadcrumb-current">批量工作台</span></div><div class="topbar-right"><button id="jobs-button" class="quiet"><svg><use href="#i-clock"/></svg>任务记录 <span id="job-count" class="count">0</span></button><span class="avatar">LE</span></div></header>
+    <main>
+      <section id="view-workspace" class="view">
+        <div class="page-heading"><div><div class="eyebrow">YOUR PRODUCT, IN FOCUS</div><h1>商品图，轻松成片<span>。</span></h1><p>上传包包，挑选背景，让每一张商品图自然出彩。</p></div><button class="primary" data-upload="products"><svg><use href="#i-upload"/></svg>上传商品照片</button></div>
+        <div class="flow-strip"><div class="flow-step"><span>01</span><strong>Photoroom 抠图</strong><small>自动保存透明 PNG</small></div><i>→</i><div class="flow-step"><span>02</span><strong>单模板摆放</strong><small>拖动、缩放、旋转后确认</small></div><i>→</i><div class="flow-step"><span>03</span><strong>批量模板与光影</strong><small>套用所有模板，再交给 ChatGPT</small></div><i>→</i><div class="flow-step"><span>04</span><strong>挑选与下载</strong><small>单张或批量打包</small></div></div>
+        <section class="products-panel">
+          <div class="section-heading"><div><h2>商品照片 <span id="product-count" class="count">0</span></h2><p>抠图完成后，先用一个模板调整摆放；确认后生成全部组合。</p></div><button class="text-button" id="select-products">全选商品</button></div>
+          <div id="product-grid" class="product-grid"></div>
+          <div id="product-empty" class="upload-zone" data-drop="products"><span class="upload-art"><svg><use href="#i-bag"/></svg><b>+</b></span><h3>把你的包包照片放到这里</h3><p>拖入多张照片，自动开始批量去背景</p><button class="secondary" data-upload="products">选择商品照片</button><small>JPG / PNG / WebP · 单张不超过 30 MB · 每次最多 100 张</small></div>
+          <div id="size-toolbar" class="size-toolbar" hidden><span>已选 <strong id="selected-product-count">0</strong> 个商品</span><div class="size-segments" id="batch-sizes" aria-label="批量设置包包尺寸"></div><button class="secondary small" id="align-next">依次调整摆放</button><button class="quiet" id="download-cutouts"><svg><use href="#i-download"/></svg>下载透明图</button></div>
+        </section>
+        <section class="previews-panel">
+          <div class="section-heading"><div><h2>已确认的模板组合 <span id="preview-count" class="count">0</span></h2><p id="preview-description">使用已确认的位置与旋转，套用所有背景模板；多选后交给 ChatGPT。</p></div><button class="text-button" data-view="templates">管理背景模板 <svg><use href="#i-arrow"/></svg></button></div>
+          <div class="gallery-toolbar"><div class="toolbar-left"><button class="secondary small" id="select-composites">全选预览</button><button class="quiet small" id="clear-composites">取消选择</button><span id="scope-label"></span></div><div class="toolbar-right"><label class="sr-only" for="preview-filter">预览状态</label><select id="preview-filter"><option value="all">所有预览</option><option value="new">尚未生成</option><option value="done">已有成品</option></select><label class="sr-only" for="preview-search">搜索商品或模板</label><input id="preview-search" type="search" placeholder="搜索商品或背景…"></div></div>
+          <div id="composite-grid" class="image-grid"></div>
+          <div id="composite-empty" class="empty-state"></div>
+        </section>
+      </section>
+
+      <section id="view-templates" class="view" hidden>
+        <div class="page-heading"><div><div class="eyebrow">SET THE SCENE</div><h1>好背景，好氛围<span>。</span></h1><p>集中管理你的背景，每个模板都为商品准备就绪。</p></div><button class="primary" data-upload="templates"><svg><use href="#i-upload"/></svg>上传背景模板</button></div>
+        <div class="info-banner"><svg><use href="#i-image"/></svg><div><strong>统一 4:5，保留自然比例</strong><p>自动修正方向，等比缩放后居中裁切至 1080 × 1350。图片不会被拉伸；边缘略有差异时会裁掉多余部分。</p></div><span class="format-chip">1080 × 1350</span></div>
+        <div class="section-heading"><h2>模板库 <span id="template-count" class="count">0</span></h2><span class="muted">点击图片放大查看 · 移除模板会保留已有成品</span></div>
+        <div id="template-grid" class="image-grid"></div>
+        <div id="template-empty" class="upload-zone" data-drop="templates"><span class="upload-art"><svg><use href="#i-image"/></svg><b>+</b></span><h3>给商品准备一个好场景</h3><p>干净的桌面、温柔的光线、旁边的绿植…</p><button class="secondary" data-upload="templates">选择背景模板</button><small>支持多张拖入 · JPG / PNG / WebP</small></div>
+      </section>
+
+      <section id="view-results" class="view" hidden>
+        <div class="page-heading"><div><div class="eyebrow">READY FOR THEIR CLOSE-UP</div><h1>挑选你的心动成片<span>。</span></h1><p>比较每一次生成，留下最适合商品的那一张。</p></div><button class="secondary" data-view="workspace">返回工作台 <svg><use href="#i-arrow"/></svg></button></div>
+        <div class="gallery-toolbar"><div class="toolbar-left"><button class="secondary small" id="select-results">全选成品</button><button class="quiet small" id="clear-results">取消选择</button><span id="result-total" class="muted"></span></div><div class="toolbar-right"><label class="sr-only" for="result-product">商品筛选</label><select id="result-product"><option value="all">所有商品</option></select><label class="sr-only" for="result-search">搜索成品</label><input id="result-search" type="search" placeholder="搜索商品或背景…"></div></div>
+        <div id="result-grid" class="image-grid"></div><div id="result-empty" class="empty-state"></div>
+      </section>
+    </main>
+    <footer class="action-dock" id="generation-dock"><div class="dock-summary"><span class="dock-symbol"><svg><use href="#i-spark"/></svg></span><div><strong>已选择 <span id="selected-composite-count">0</span> 张合成图</strong><small id="generation-estimate">选中喜欢的组合，开始自然光影处理</small></div></div><div class="dock-controls"><button class="quiet" id="download-composites" disabled title="下载所选合成预览"><svg><use href="#i-download"/></svg>合成图</button><label for="generation-n">每张生成</label><select id="generation-n"></select><span>个结果</span><button class="primary" id="generate-button" disabled><svg><use href="#i-spark"/></svg>ChatGPT 处理</button></div></footer>
+    <footer class="action-dock" id="results-dock" hidden><div class="dock-summary"><span class="dock-symbol"><svg><use href="#i-check"/></svg></span><div><strong>已选择 <span id="selected-result-count">0</span> 张成品</strong><small>原商品细节已还原 · 1080 × 1350 PNG</small></div></div><button class="primary" id="download-results" disabled><svg><use href="#i-download"/></svg>打包下载所选成品</button></footer>
+  </div>
+
+  <input id="products-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+  <input id="templates-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+  <div id="toast-container" aria-live="polite"></div>
+
+  <dialog id="placement-dialog" class="placement-dialog">
+    <div class="dialog-header"><div><span class="eyebrow">02 · FIND THE RIGHT POSITION</span><h2 id="placement-title">调整商品摆放</h2><p class="muted">先在一个背景上确认，再套用到所有模板。</p></div><button class="icon-button" data-close="placement-dialog" aria-label="关闭摆放预览"><svg><use href="#i-close"/></svg></button></div>
+    <div class="placement-layout">
+      <div class="placement-preview"><canvas id="placement-canvas" width="1080" height="1350" tabindex="0" aria-label="商品摆放画布，可拖动商品或使用方向键移动"></canvas><p>拖动包包调整位置 · 方向键微调 · Shift + 方向键移动 10px</p><span id="placement-status" role="status">正在加载预览…</span></div>
+      <aside class="placement-controls">
+        <label class="control-label" for="placement-template">预览背景</label><select id="placement-template"></select>
+        <div class="detail-label">从五档尺寸开始</div><div id="placement-sizes" class="size-segments"></div>
+        <div class="control-heading"><label for="placement-width">包包宽度</label><span><input id="placement-width-number" type="number" min="5" max="100" step="0.1" aria-label="包包宽度百分比">%</span></div><input id="placement-width" type="range" min="5" max="100" step="0.1" value="65">
+        <div class="control-heading"><label for="placement-angle">旋转角度</label><span><input id="placement-angle-number" type="number" min="-180" max="180" step="0.1" aria-label="旋转角度数值">°</span></div><input id="placement-angle" type="range" min="-180" max="180" step="0.1" value="0">
+        <div class="rotation-shortcuts"><button class="secondary small" id="placement-rotate-left">↶ 5°</button><button class="secondary small" id="placement-straight">摆正</button><button class="secondary small" id="placement-rotate-right">↷ 5°</button></div>
+        <div class="detail-label">中心位置 · 相对背景</div><div class="position-fields"><label>水平 <span><input id="placement-x" type="number" min="0" max="100" step="0.1">%</span></label><label>垂直 <span><input id="placement-y" type="number" min="0" max="100" step="0.1">%</span></label></div>
+        <button id="placement-reset" class="quiet">恢复默认 · 居中 / 底部 1/8</button>
+        <div class="placement-note"><strong>确认后，所有背景使用这组摆放。</strong><p>位置、大小和旋转一致。ChatGPT 处理完成后，再覆盖这次摆放的原商品，保护纹理和细节。</p></div>
+        <div id="placement-error" class="detail-error" hidden></div>
+      </aside>
+    </div>
+    <div class="placement-footer"><span id="placement-footer-note" class="muted"></span><div><button class="secondary" id="placement-next">确认并继续下一个</button><button class="primary" id="placement-confirm" disabled>确认并套用所有模板</button></div></div>
+  </dialog>
+
+  <dialog id="inspector" class="inspector-dialog"><div class="dialog-header"><div><span class="eyebrow">IMAGE PIPELINE</span><h2 id="inspector-title">图片流程</h2></div><button class="icon-button" data-close="inspector" aria-label="关闭"><svg><use href="#i-close"/></svg></button></div><div class="inspector-layout"><div class="inspector-preview checker"><img id="inspector-image" alt="当前阶段图片"><div id="inspector-no-image">等待图片处理</div><button id="zoom-button" class="secondary small">查看原始尺寸</button></div><aside class="inspector-info"><div id="inspector-stages" class="stage-tabs"></div><div id="inspector-details"></div><div id="inspector-variants" class="variant-list"></div><a id="inspector-download" class="secondary" href="#"><svg><use href="#i-download"/></svg>下载当前图片</a></aside></div></dialog>
+  <dialog id="lightbox" class="lightbox"><button class="icon-button" data-close="lightbox" aria-label="关闭"><svg><use href="#i-close"/></svg></button><img id="lightbox-image" alt="原始图片，点击或滚动查看细节"></dialog>
+  <dialog id="jobs-dialog" class="small-dialog"><div class="dialog-header"><div><span class="eyebrow">WORK IN PROGRESS</span><h2>任务记录</h2></div><button class="icon-button" data-close="jobs-dialog" aria-label="关闭"><svg><use href="#i-close"/></svg></button></div><div class="dialog-content"><p class="muted">后台持续处理；单张失败不会阻断整批。AI 中断后请先核对成品再手动重试。</p><div id="jobs-list"></div></div></dialog>
+  <dialog id="settings-dialog" class="small-dialog"><div class="dialog-header"><div><span class="eyebrow">YOUR RECIPE</span><h2>处理设置</h2></div><button class="icon-button" data-close="settings-dialog" aria-label="关闭"><svg><use href="#i-close"/></svg></button></div><div class="dialog-content" id="settings-content"></div></dialog>
+  <dialog id="confirm-dialog" class="confirm-dialog"><div class="dialog-header"><h2 id="confirm-title"></h2></div><p id="confirm-description"></p><div class="confirm-actions"><button class="secondary" id="confirm-cancel">取消</button><button class="primary danger" id="confirm-ok">移除</button></div></dialog>
+</body>
+</html>

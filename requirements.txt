@@ -1,0 +1,5 @@
+Flask>=3.1,<4
+Pillow>=11,<13
+openai>=2,<3
+httpx>=0.28,<1
+waitress>=3,<4

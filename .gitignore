@@ -1,0 +1,15 @@
+openai_key
+openai_key.*
+photoroom_key
+photoroom_key.*
+.env
+.env.*
+!.env.example
+.venv/
+.venv-*/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+data/
+.test-artifacts/
+*.log
