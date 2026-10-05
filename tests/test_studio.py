@@ -488,3 +488,113 @@ def test_four_template_workers_prepare_foreground_once_and_retry_only_missing(st
     before = {r["id"] for r in studio.rows("SELECT id FROM composites")}
     studio.compose_product(product["id"])
     assert {r["id"] for r in studio.rows("SELECT id FROM composites")} == before
+
+
+def test_poof_wired_to_upload_and_recut_preserves_old_history(studio_app, monkeypatch):
+    import httpx
+    import app as app_module
+    import poof_service
+    client = studio_app.test_client()
+    studio = studio_app.extensions["studio"]
+    studio_app.config["REMOVER"] = None
+    monkeypatch.setenv("POOF_API_KEY", "test-poof-key")
+    requests = []
+    response = io.BytesIO()
+    cutout(None).save(response, "PNG")
+    def handler(request):
+        assert str(request.url) == poof_service.ENDPOINT
+        requests.append(request)
+        return httpx.Response(200, content=response.getvalue())
+    real_client = httpx.Client
+    monkeypatch.setattr(poof_service.httpx, "Client", lambda **kwargs: real_client(**kwargs, transport=httpx.MockTransport(handler)))
+    studio.run_job(upload(client, "products").json["job_id"])
+    state = client.get("/api/state").json
+    assert state["removal_provider"] == "poof" and state["removal_ready"] is True
+    product = state["products"][0]
+    assert product["cutout_provider"] == "poof" and product["status"] == "ready"
+    old_cutout = product["cutout"]
+    studio.write("UPDATE products SET cutout_provider='photoroom' WHERE id=?", (product["id"],))
+    job = client.post("/api/products/remove-background", json={"ids": [product["id"]]}).json["job_id"]
+    studio.run_job(job)
+    current = client.get("/api/state").json["products"][0]
+    assert current["cutout_provider"] == "poof" and current["cutout"] != old_cutout
+    assert current["placement_confirmed"] == 0 and (studio.media / old_cutout).exists()
+    assert len(requests) == 2
+    assert "test-poof-key" not in studio.safe_error(ValueError("test-poof-key"))
+
+
+def test_photoroom_option_uses_saved_original_and_keeps_history(studio_app, monkeypatch):
+    import app as app_module
+    client, state = prepared(studio_app, templates=1)
+    studio = studio_app.extensions["studio"]
+    product = state["products"][0]
+    original = (studio.media / product["original"]).read_bytes()
+    old_cutout = product["cutout"]
+    old_composite = state["composites"][0]
+    studio_app.config["REMOVER"] = None
+    monkeypatch.setattr(app_module, "load_photoroom_key", lambda root: "test-photo-key")
+    def photo(image, root):
+        saved = read_image(io.BytesIO(original))
+        assert image.size == saved.size and image.tobytes() == saved.tobytes()
+        return cutout(None)
+    photo_spy = Mock(side_effect=photo)
+    monkeypatch.setattr(app_module, "remove_with_photoroom", photo_spy)
+    monkeypatch.setattr(app_module, "remove_background", lambda *args: pytest.fail("Explicit Photoroom must not call Poof"))
+    response = client.post("/api/products/remove-background", json={"ids": [product["id"]], "provider": "photoroom"})
+    assert response.status_code == 202
+    settings = json.loads(studio.one("SELECT settings FROM jobs WHERE id=?", (response.json["job_id"],))["settings"])
+    assert settings["providers"] == {product["id"]: "photoroom"}
+    studio.run_job(response.json["job_id"])
+    current = client.get("/api/state").json["products"][0]
+    assert current["cutout_provider"] == "photoroom" and current["remove_provider"] == "photoroom"
+    assert current["status"] == "ready" and not current["placement_confirmed"]
+    assert current["cutout"] != old_cutout
+    assert (studio.media / old_cutout).exists() and (studio.media / old_composite["file"]).exists()
+    assert (studio.media / product["original"]).read_bytes() == original
+    assert client.get(f"/api/download/original/{product['id']}").data == original
+    assert photo_spy.call_count == 1
+
+
+@pytest.mark.parametrize("retry_kind", ["product", "job"])
+def test_photoroom_failure_retry_keeps_selected_provider(studio_app, monkeypatch, retry_kind):
+    import app as app_module
+    client, state = prepared(studio_app, templates=1)
+    studio = studio_app.extensions["studio"]
+    product = state["products"][0]
+    studio_app.config["REMOVER"] = None
+    monkeypatch.setattr(app_module, "load_photoroom_key", lambda root: "test-photo-key")
+    photo = Mock(side_effect=[ValueError("temporary photo failure"), cutout(None)])
+    monkeypatch.setattr(app_module, "remove_with_photoroom", photo)
+    monkeypatch.setattr(app_module, "remove_background", lambda *args: pytest.fail("Retry must keep Photoroom"))
+    job = client.post("/api/products/remove-background", json={"ids": [product["id"]], "provider": "photoroom"}).json["job_id"]
+    studio.run_job(job)
+    assert studio.one("SELECT status FROM products WHERE id=?", (product["id"],))["status"] == "error"
+    assert (studio.media / product["cutout"]).exists()
+    if retry_kind == "product":
+        retry = client.post("/api/products/retry", json={"ids": [product["id"]]})
+    else:
+        # A historical job carries its own choice even if the product has since
+        # been set to use a different provider.
+        studio.write("UPDATE products SET remove_provider='poof' WHERE id=?", (product["id"],))
+        retry = client.post(f"/api/jobs/{job}/retry", json={})
+    assert retry.status_code in (200, 202)
+    studio.run_job(retry.json["job_id"])
+    current = client.get("/api/state").json["products"][0]
+    assert current["status"] == "ready" and current["cutout_provider"] == "photoroom"
+    assert photo.call_count == 2
+
+
+def test_recut_rejects_invalid_provider_or_missing_key_before_changes(studio_app, monkeypatch):
+    import app as app_module
+    client, state = prepared(studio_app, templates=1)
+    studio = studio_app.extensions["studio"]
+    product = state["products"][0]
+    studio_app.config["REMOVER"] = None
+    monkeypatch.setattr(app_module, "load_photoroom_key", lambda root: "")
+    before = studio.rows("SELECT * FROM products")
+    jobs = studio.rows("SELECT id FROM jobs")
+    for provider in ("photoroom", "unknown", ["photoroom"]):
+        response = client.post("/api/products/remove-background", json={"ids": [product["id"]], "provider": provider})
+        assert response.status_code == 400
+    assert studio.rows("SELECT * FROM products") == before
+    assert studio.rows("SELECT id FROM jobs") == jobs

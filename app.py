@@ -18,7 +18,8 @@ from PIL import Image, UnidentifiedImageError
 from werkzeug.exceptions import HTTPException
 
 from ai_service import PROMPT, SETTINGS, edit_images, load_key
-from photoroom_service import load_photoroom_key, remove_background
+from photoroom_service import load_photoroom_key, remove_background as remove_with_photoroom
+from poof_service import load_poof_key, remove_background
 from imaging import (BASELINE, CANVAS, LAYOUT_SIGNATURE, SIZE_WIDTHS, compose,
                      normalize_template, product_layer, read_image, restore_product, save_image, validate_alignment)
 
@@ -86,7 +87,8 @@ class Studio:
             db.executescript(SCHEMA)
             columns = {row["name"] for row in db.execute("PRAGMA table_info(products)")}
             for column, declaration in {"alignment": "TEXT", "placement_confirmed": "INTEGER NOT NULL DEFAULT 0",
-                                        "preview_template_id": "TEXT", "cutout_provider": "TEXT"}.items():
+                                        "preview_template_id": "TEXT", "cutout_provider": "TEXT",
+                                        "remove_provider": "TEXT NOT NULL DEFAULT 'poof'"}.items():
                 if column not in columns:
                     db.execute(f"ALTER TABLE products ADD COLUMN {column} {declaration}")
             columns = {row["name"] for row in db.execute("PRAGMA table_info(results)")}
@@ -98,7 +100,7 @@ class Studio:
             db.execute("UPDATE job_items SET status='interrupted', error=? WHERE status IN ('queued','running')",
                        ("上次服务已停止，请手动重试。AI 请求可能已经计费，请先检查结果。",))
             db.execute("UPDATE jobs SET status='interrupted', finished=? WHERE status IN ('queued','running')", (now(),))
-            db.execute("UPDATE products SET status='error', error='上次 Photoroom 请求被中断，请先检查后手动重试，可能已计费。' WHERE status IN ('queued','running')")
+            db.execute("UPDATE products SET status='error', error='上次抠图请求被中断，请先检查后手动重试，可能已计费。' WHERE status IN ('queued','running')")
             previous_layout = db.execute("SELECT value FROM studio_meta WHERE key='layout'").fetchone()
             if previous_layout is None or previous_layout["value"] != LAYOUT_SIGNATURE:
                 db.execute("UPDATE products SET revision=revision+1 WHERE deleted=0")
@@ -137,13 +139,13 @@ class Studio:
     def safe_error(self, error):
         # API error text can contain request information; scrub credentials.
         message = str(error)
-        for key in (load_key(ROOT), load_photoroom_key(ROOT)):
+        for key in (load_key(ROOT), load_poof_key(ROOT), load_photoroom_key(ROOT)):
             if key:
                 message = message.replace(key, "[key hidden]")
         message = re.sub(r"sk-[A-Za-z0-9_\-]+", "[key hidden]", message)
         return message[:1200] or "处理失败，请重试。"
 
-    def queue(self, kind, references, n=0):
+    def queue(self, kind, references, n=0, removal_providers=None):
         references = list(dict.fromkeys(references))
         if not references:
             return None
@@ -160,18 +162,28 @@ class Studio:
                     return None
                 identifier = uid()
                 settings = json.dumps({**SETTINGS, "prompt": PROMPT, "n": n}, ensure_ascii=False) if kind == "generate" else None
+                if kind == "remove":
+                    providers = {}
+                    for ref in references:
+                        row = db.execute("SELECT remove_provider FROM products WHERE id=?", (ref,)).fetchone()
+                        provider = (removal_providers or {}).get(ref, row[0] if row else "poof")
+                        if provider not in {"poof", "photoroom"}:
+                            raise ValueError("抠图服务只能选择 Poof 或 Photoroom。")
+                        providers[ref] = provider
+                    settings = json.dumps({"providers": providers})
                 db.execute("INSERT INTO jobs (id,kind,status,n,created,settings) VALUES (?,?,?,?,?,?)",
                            (identifier, kind, "queued", n, now(), settings))
                 for ref in references:
                     db.execute("INSERT INTO job_items (id,job_id,ref_id,status) VALUES (?,?,?,?)",
                                (uid(), identifier, ref, "queued"))
                     if kind == "remove":
-                        db.execute("UPDATE products SET status='queued',error=NULL,placement_confirmed=0 WHERE id=?", (ref,))
+                        db.execute("UPDATE products SET status='queued',error=NULL,placement_confirmed=0,remove_provider=? WHERE id=?",
+                                   (providers[ref], ref))
             if not self.app.config["DISABLE_WORKERS"]:
                 (self.ai if kind == "generate" else self.local).submit(self.run_job, identifier)
         return identifier
 
-    def remove(self, product_id):
+    def remove(self, product_id, provider="poof"):
         product = self.one("SELECT * FROM products WHERE id=? AND deleted=0", (product_id,))
         if not product:
             raise ValueError("商品已删除。")
@@ -181,14 +193,14 @@ class Studio:
         if remover:
             output = remover(image)
         else:
-            output = remove_background(image, ROOT)
+            output = (remove_with_photoroom if provider == "photoroom" else remove_background)(image, ROOT)
         output = output.convert("RGBA")
         if not output.getchannel("A").point(lambda a: 255 if a > 8 else 0).getbbox():
             raise ValueError("去背景后没有可见商品，请更换原图。")
         relative = f"cutouts/{product_id}_{uid()}.png"
         save_image(output, self.media / relative)
-        self.write("UPDATE products SET cutout=?,status='ready',error=NULL,cutout_provider='photoroom',"
-                   "placement_confirmed=0,alignment=NULL,revision=revision+1 WHERE id=?", (relative, product_id))
+        self.write("UPDATE products SET cutout=?,status='ready',error=NULL,cutout_provider=?,"
+                   "placement_confirmed=0,alignment=NULL,revision=revision+1 WHERE id=?", (relative, provider, product_id))
 
     def compose_product(self, product_id):
         product = self.one("SELECT * FROM products WHERE id=? AND status='ready' AND deleted=0 AND placement_confirmed=1", (product_id,))
@@ -287,7 +299,8 @@ class Studio:
             self.write("UPDATE job_items SET status='running' WHERE id=?", (item["id"],))
             try:
                 if job["kind"] == "remove":
-                    self.remove(item["ref_id"])
+                    providers = json.loads(job["settings"] or "{}").get("providers", {})
+                    self.remove(item["ref_id"], providers.get(item["ref_id"], "poof"))
                 elif job["kind"] == "compose":
                     self.compose_product(item["ref_id"])
                 elif job["kind"] == "restore":
@@ -361,13 +374,14 @@ def create_app(config=None):
                 job.pop("settings", None)
         return jsonify(products=products, templates=templates, composites=composites,
                        results=results, jobs=jobs, key_ready=bool(load_key(ROOT)),
-                       photoroom_ready=bool(load_photoroom_key(ROOT)), removal_provider="photoroom",
+                       removal_ready=bool(load_poof_key(ROOT)), removal_provider="poof",
+                       photoroom_ready=bool(load_photoroom_key(ROOT)),
                        compose_workers=studio.compose_workers,
                        sizes=SIZE_WIDTHS, baseline=BASELINE, canvas=CANVAS, settings=SETTINGS, prompt=PROMPT)
 
     def upload(kind):
-        if kind == "products" and not load_photoroom_key(ROOT) and not app.config.get("REMOVER"):
-            raise ValueError("找不到 Photoroom key，请放入根目录 photoroom_key 后上传。")
+        if kind == "products" and not load_poof_key(ROOT) and not app.config.get("REMOVER"):
+            raise ValueError("找不到 Poof key，请放入根目录 poof.bg_key 后上传。")
         files = request.files.getlist("files")
         if not files:
             raise ValueError("请至少选择一张图片。")
@@ -506,11 +520,19 @@ def create_app(config=None):
 
     @app.post("/api/products/remove-background")
     def reprocess_products():
-        identifiers = ids(payload())
+        body = payload()
+        identifiers = ids(body)
         require_rows("products", identifiers)
-        if not load_photoroom_key(ROOT) and not app.config.get("REMOVER"):
-            raise ValueError("找不到 Photoroom key，请放入根目录 photoroom_key。")
-        return jsonify(job_id=studio.queue("remove", identifiers)), 202
+        provider = body.get("provider", "poof")
+        check_removal_key(provider)
+        return jsonify(job_id=studio.queue("remove", identifiers, removal_providers={ref: provider for ref in identifiers})), 202
+
+    def check_removal_key(provider):
+        if provider not in ("poof", "photoroom"):
+            raise ValueError("抠图服务只能选择 Poof 或 Photoroom。")
+        loader, label, filename = (load_photoroom_key, "Photoroom", "photoroom_key") if provider == "photoroom" else (load_poof_key, "Poof", "poof.bg_key")
+        if not loader(ROOT) and not app.config.get("REMOVER"):
+            raise ValueError(f"找不到 {label} key，请放入根目录 {filename}。")
 
     @app.post("/api/products/retry")
     def retry_remove():
@@ -518,8 +540,8 @@ def create_app(config=None):
         rows = require_rows("products", identifiers)
         if any(row["status"] != "error" for row in rows):
             raise ValueError("只有失败的商品需要重新去背景。")
-        if not load_photoroom_key(ROOT) and not app.config.get("REMOVER"):
-            raise ValueError("找不到 Photoroom key，请放入根目录 photoroom_key。")
+        for row in rows:
+            check_removal_key(row["remove_provider"])
         return jsonify(job_id=studio.queue("remove", identifiers))
 
     @app.delete("/api/templates/<identifier>")
@@ -562,7 +584,12 @@ def create_app(config=None):
         references = [item["ref_id"] for item in failed]
         if job["kind"] in {"remove", "compose"}:
             references = [r for r in references if studio.one("SELECT id FROM products WHERE id=? AND deleted=0", (r,))]
-        return jsonify(job_id=studio.queue(job["kind"], references, job["n"])), 202
+        providers = json.loads(job["settings"] or "{}").get("providers", {}) if job["kind"] == "remove" else None
+        if job["kind"] == "remove":
+            for ref in references:
+                check_removal_key(providers.get(ref, "poof"))
+            providers = {ref: providers.get(ref, "poof") for ref in references}
+        return jsonify(job_id=studio.queue(job["kind"], references, job["n"], removal_providers=providers)), 202
 
     @app.get("/media/<path:filename>")
     def media(filename):

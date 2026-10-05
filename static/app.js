@@ -5,7 +5,7 @@ const icon = (name) => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const percent = (value) => Number((value * 100).toFixed(1));
 const media = (file, thumb = false) => `/media/${file ? file.replace(/\.png$/, thumb ? "_thumb.png" : ".png") : ""}`;
 const statusText = {queued:"等待处理", running:"处理中", ready:"已去背景", done:"已完成", error:"处理失败", partial:"部分失败", interrupted:"已中断"};
-const jobTitles = {remove:"Photoroom 批量抠图", compose:"合成预览", generate:"ChatGPT 光影处理", restore:"还原商品细节"};
+const jobTitles = {remove:"批量抠图", compose:"合成预览", generate:"ChatGPT 光影处理", restore:"还原商品细节"};
 let state = {products:[], templates:[], composites:[], results:[], jobs:[], sizes:{}};
 let view = "workspace", fingerprint = "", firstLoad = true, refreshing = false, submitting = false;
 let selectedProducts = new Set(), selectedComposites = new Set(), selectedResults = new Set();
@@ -72,6 +72,13 @@ function render() {
   renderProducts(); renderComposites(); renderTemplates(); renderResults(); renderDock(); renderJobs();
   if ($("inspector").open && inspector) renderInspector();
 }
+function recutButtons(product, className = "product-recut") {
+  if (!["ready", "error"].includes(product.status)) return "";
+  return ["poof", "photoroom"].map(provider => {
+    const name = provider === "photoroom" ? "Photoroom" : "Poof";
+    return `<button class="${className}" data-recut-product="${product.id}" data-recut-provider="${provider}" title="从保存的原始照片调用 ${name} API 抠图">用 ${name} 重新抠图</button>`;
+  }).join("");
+}
 function renderProducts() {
   $("product-empty").hidden = !!state.products.length;
   $("product-grid").innerHTML = state.products.map(p=> {
@@ -82,7 +89,7 @@ function renderProducts() {
       <button class="product-image ${p.cutout ? "checker" : ""}" data-inspect-product="${p.id}" title="查看图片流程"><img loading="lazy" src="${media(p.cutout || p.original, true)}" alt="${escapeHTML(p.name)}"></button>
       <div class="product-meta"><strong title="${escapeHTML(p.name)}">${escapeHTML(p.name)}</strong><div class="product-footer"><select data-size-product="${p.id}" aria-label="${escapeHTML(p.name)} 的尺寸">${Object.keys(state.sizes).map(s=>`<option ${s===p.size ? "selected" : ""}>${s}</option>`).join("")}</select>
       ${p.status==="error" ? `<button class="status-label error" data-retry-product="${p.id}" title="${escapeHTML(p.error)}">失败 · 重试</button>` : `<span class="status-label ${pending ? "pending" : ""}">${pending ? '<i class="spinner"></i>' : ""}${p.status==="ready" ? (p.placement_confirmed ? "摆放已确认" : "待确认摆放") : statusText[p.status]}</span>`}</div>
-      ${p.status==="ready" ? `<button class="product-align ${p.placement_confirmed ? "confirmed" : ""}" data-align-product="${p.id}">${p.placement_confirmed ? "调整摆放" : "预览并调整摆放"} ${icon("arrow")}</button><button class="product-recut" data-recut-product="${p.id}" title="调用 Photoroom API 重新抠图">${p.cutout_provider==="photoroom" ? "Photoroom · 重新抠图" : "改用 Photoroom 抠图"}</button>` : ""}</div></article>`;
+      ${p.status==="ready" ? `<button class="product-align ${p.placement_confirmed ? "confirmed" : ""}" data-align-product="${p.id}">${p.placement_confirmed ? "调整摆放" : "预览并调整摆放"} ${icon("arrow")}</button>` : ""}${recutButtons(p)}</div></article>`;
   }).join("");
   $("size-toolbar").hidden = !selectedProducts.size;
   $("selected-product-count").textContent = selectedProducts.size;
@@ -141,7 +148,7 @@ async function uploadFiles(kind, files) {
   toast(`正在上传 ${files.length} 张${kind==="products" ? "商品照片" : "背景模板"}…`);
   try {
     const result = await api(`/api/${kind}`,{method:"POST",body:form});
-    toast(`已上传 ${result.accepted.length} 张${kind==="products" ? "照片，Photoroom 正在抠图" : "背景模板，已统一为 1080 × 1350"}。`);
+    toast(`已上传 ${result.accepted.length} 张${kind==="products" ? "照片，Poof 正在抠图" : "背景模板，已统一为 1080 × 1350"}。`);
     if (result.rejected.length) toast(result.rejected.map(r=>`${r.name}：${r.error}`).join("\n"),true);
     await refresh(true);
   } catch(error) { toast(error.message,true); }
@@ -193,10 +200,10 @@ function renderInspector() {
   let file=null, download=null, details="", variants="";
   if (stage==="original") {
     file=p.original; download=`/api/download/original/${p.id}`;
-    details=`<div class="detail-label">原始照片</div><div class="detail-value">${escapeHTML(p.name)}</div><div class="detail-label">当前包包尺寸</div><div class="detail-value">${p.size} · ${percent(state.sizes[p.size])}% 画布宽度</div>`;
+    details=`<div class="detail-label">原始照片</div><div class="detail-value">${escapeHTML(p.name)}</div><p class="muted">上传原图已在本地保存（修正方向后存为 PNG）。重新抠图始终读取这张原图。</p><div class="detail-label">当前包包尺寸</div><div class="detail-value">${p.size} · ${percent(state.sizes[p.size])}% 画布宽度</div>`;
   } else if (stage==="cutout") {
     file=p.cutout; download=file ? `/api/download/cutout/${p.id}` : null;
-    details=`<div class="detail-label">去背景状态</div><div class="detail-value">${statusText[p.status]} · ${p.cutout_provider==="photoroom" ? "Photoroom" : "已有透明图"}</div><div class="detail-label">格式</div><div class="detail-value">透明 PNG</div>${p.status==="ready" ? `<button class="primary small" data-align-product="${p.id}">预览并调整摆放</button><button class="quiet small" data-recut-product="${p.id}">用 Photoroom 重新抠图</button>` : ""}${p.error ? `<div class="detail-error">${escapeHTML(p.error)}</div><button class="secondary small" data-retry-product="${p.id}">重新去背景</button>` : ""}`;
+    details=`<div class="detail-label">去背景状态</div><div class="detail-value">${statusText[p.status]} · ${({poof:"Poof", photoroom:"Photoroom"}[p.cutout_provider] || "已有透明图")}</div><div class="detail-label">格式</div><div class="detail-value">透明 PNG</div>${p.status==="ready" ? `<button class="primary small" data-align-product="${p.id}">预览并调整摆放</button>` : ""}${recutButtons(p, "quiet small")}${p.error ? `<div class="detail-error">${escapeHTML(p.error)}</div><button class="secondary small" data-retry-product="${p.id}">重新去背景</button>` : ""}`;
   } else if (stage==="composite" || stage==="result") {
     const list=stage==="composite" ? composites : results;
     const showRaw=stage==="result" && inspector.showRaw && r?.raw_file;
@@ -229,7 +236,7 @@ function renderJobs() {
   }).join("") : `<p class="muted">任务会在这里记录。上传第一张商品照片开始吧。</p>`;
 }
 function showSettings() {
-  $("settings-content").innerHTML=`<p class="muted">已保留你的 Playground 配方，只有每张生成数量在工作台动态选择。</p><table class="settings-table"><tbody>${Object.entries(state.settings || {}).map(([k,v])=>`<tr><td>${escapeHTML(k)}</td><td>${escapeHTML(v)}</td></tr>`).join("")}<tr><td>n</td><td>1–10，默认 3</td></tr></tbody></table><div class="detail-label">你的原始 Prompt</div><div class="prompt-text">${escapeHTML(state.prompt)}</div><div class="detail-label">五档尺寸 · 画布宽度</div><div class="settings-sizes">${Object.entries(state.sizes).map(([k,v])=>`<span>${k} ${percent(v)}%</span>`).join("")}</div><p class="muted">默认商品最底部距离背景底部约 12.5%（1/8），水平居中。单模板预览支持拖动、缩放、旋转和精确位置调整；确认后套用所有模板。五档按可见商品宽度计算；过高商品默认等比缩小。AI 返回后，先将背景统一为 1080 × 1350，再按生成前的原位置、原尺寸覆盖原商品。AI 原始结果保留在单图流程中供比较。</p><p class="muted">抠图使用 Photoroom Remove Background API。${state.photoroom_ready ? "已读取本地 Photoroom key。" : "请在根目录放入 photoroom_key。"}已有透明图可点击商品卡片重新抠图。</p><p class="muted">${state.key_ready ? "已读取本地 OpenAI key。" : "请把 OpenAI key 放在项目根目录的 openai_key 文件。"}生成调用在本地服务端完成。</p>`;
+  $("settings-content").innerHTML=`<p class="muted">已保留你的 Playground 配方，只有每张生成数量在工作台动态选择。</p><table class="settings-table"><tbody>${Object.entries(state.settings || {}).map(([k,v])=>`<tr><td>${escapeHTML(k)}</td><td>${escapeHTML(v)}</td></tr>`).join("")}<tr><td>n</td><td>1–10，默认 3</td></tr></tbody></table><div class="detail-label">你的原始 Prompt</div><div class="prompt-text">${escapeHTML(state.prompt)}</div><div class="detail-label">五档尺寸 · 画布宽度</div><div class="settings-sizes">${Object.entries(state.sizes).map(([k,v])=>`<span>${k} ${percent(v)}%</span>`).join("")}</div><p class="muted">默认商品最底部距离背景底部约 12.5%（1/8），水平居中。单模板预览支持拖动、缩放、旋转和精确位置调整；确认后套用所有模板。五档按可见商品宽度计算；过高商品默认等比缩小。AI 返回后，先将背景统一为 1080 × 1350，再按生成前的原位置、原尺寸覆盖原商品。AI 原始结果保留在单图流程中供比较。</p><p class="muted">抠图使用 Poof Background Removal API。${state.removal_ready ? "已读取本地 Poof key。" : "请在根目录放入 poof.bg_key。"}商品卡片和单图流程中都可选择 Poof 或 Photoroom 重新抠图。${state.photoroom_ready ? "已读取本地 Photoroom key。" : "使用 Photoroom 需在根目录放入 photoroom_key。"}重新抠图使用保存的原始照片。</p><p class="muted">${state.key_ready ? "已读取本地 OpenAI key。" : "请把 OpenAI key 放在项目根目录的 openai_key 文件。"}生成调用在本地服务端完成。</p>`;
   $("settings-dialog").showModal();
 }
 
@@ -247,8 +254,8 @@ document.addEventListener("click", async (event)=> {
     else if(d.alignProduct) { if($("inspector").open) $("inspector").close(); await openPlacementEditor(d.alignProduct); }
     else if(d.recutProduct) {
       button.disabled=true;
-      await api("/api/products/remove-background",{method:"POST",body:JSON.stringify({ids:[d.recutProduct]})});
-      toast("已提交 Photoroom 抠图，完成后请重新确认摆放。"); await refresh(true);
+      await api("/api/products/remove-background",{method:"POST",body:JSON.stringify({ids:[d.recutProduct],provider:d.recutProvider || "poof"})});
+      toast(`已提交 ${d.recutProvider === "photoroom" ? "Photoroom" : "Poof"} 抠图，完成后请重新确认摆放。`); await refresh(true);
     }
     else if(d.inspectProduct) openInspector(d.inspectProduct);
     else if(d.inspectComposite) { const c=state.composites.find(c=>c.id===d.inspectComposite); openInspector(c.product_id,"composite",c.id); }
