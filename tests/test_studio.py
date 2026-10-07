@@ -598,3 +598,98 @@ def test_recut_rejects_invalid_provider_or_missing_key_before_changes(studio_app
         assert response.status_code == 400
     assert studio.rows("SELECT * FROM products") == before
     assert studio.rows("SELECT id FROM jobs") == jobs
+
+
+def test_twenty_api_requests_shared_across_batches_and_retry_only_failure(studio_app):
+    import threading
+    import time
+    from collections import Counter
+    client, state = prepared(studio_app, products=2, templates=12)
+    studio = studio_app.extensions["studio"]
+    ids = [c["id"] for c in state["composites"]]
+    broken = state["composites"][0]["file"]
+    release, full = threading.Event(), threading.Event()
+    lock = threading.Lock()
+    active, peak, calls = 0, 0, []
+    output = image_bytes()
+    def editor(path, n, root):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            calls.append(path.name)
+            if active == 20:
+                full.set()
+        try:
+            assert release.wait(15), "20 parallel requests were not released"
+            if path.name == broken.split("/")[-1]:
+                raise RuntimeError("429 simulated rate limit")
+            return [output for _ in range(n)]
+        finally:
+            with lock:
+                active -= 1
+    studio_app.config["EDITOR"] = editor
+    studio_app.config["DISABLE_WORKERS"] = False
+    try:
+        first = client.post("/api/generate", json={"ids": ids[:12], "n": 1}).json["job_id"]
+        second = client.post("/api/generate", json={"ids": ids[12:], "n": 1}).json["job_id"]
+        assert full.wait(12), "A batch must submit its individual images concurrently"
+        snapshot = client.get("/api/state").json
+        assert snapshot["ai_workers"] == 20 and peak == 20
+        processing = [j for j in snapshot["jobs"] if j["id"] in {first, second}]
+        assert all(any(i["status"] == "running" for i in j["items"]) for j in processing)
+        assert sum(i["status"] == "running" for j in processing for i in j["items"]) == 20
+        assert sum(i["status"] == "queued" for j in processing for i in j["items"]) == 4
+        assert client.post("/api/generate", json={"ids": ids, "n": 1}).json["job_id"] is None
+    finally:
+        release.set()
+    def wait_jobs(jobs):
+        deadline = time.monotonic() + 25
+        while time.monotonic() < deadline:
+            if all(studio.one("SELECT status FROM jobs WHERE id=?", (j,))["status"] not in {"queued", "running"} for j in jobs):
+                return
+            time.sleep(.05)
+        pytest.fail("Concurrent batch did not finish")
+    wait_jobs([first, second])
+    assert peak == 20 and len(calls) == 24 and all(count == 1 for count in Counter(calls).values())
+    assert len(studio.rows("SELECT id FROM results")) == 23
+    assert studio.one("SELECT status FROM jobs WHERE id=?", (first,))["status"] == "partial"
+    studio_app.config["EDITOR"] = lambda path, n, root: [output for _ in range(n)]
+    retry = client.post(f"/api/jobs/{first}/retry", json={}).json["job_id"]
+    wait_jobs([retry])
+    assert len(studio.rows("SELECT id FROM job_items WHERE job_id=?", (retry,))) == 1
+    assert len(studio.rows("SELECT id FROM results")) == 24
+
+
+def test_best_result_belongs_to_product_replaces_persists_and_downloads(studio_app):
+    client, state = prepared(studio_app, products=2, templates=1)
+    studio = studio_app.extensions["studio"]
+    job = client.post("/api/generate", json={"ids": [c["id"] for c in state["composites"]], "n": 2}).json["job_id"]
+    studio.run_job(job)
+    state = client.get("/api/state").json
+    first, second = state["products"]
+    first_results = [r for r in state["results"] if r["product_id"] == first["id"]]
+    second_result = next(r for r in state["results"] if r["product_id"] == second["id"])
+    endpoint = f"/api/products/{first['id']}/best-result"
+    for body in ({}, {"result_id": "missing"}, {"result_id": second_result["id"]}, {"result_id": []}):
+        assert client.patch(endpoint, json=body).status_code == 400
+    for result in first_results:
+        assert client.patch(endpoint, json={"result_id": result["id"]}).status_code == 200
+    assert len(studio.rows("SELECT * FROM product_picks")) == 1
+    assert client.patch(f"/api/products/{second['id']}/best-result", json={"result_id": second_result["id"]}).status_code == 200
+    picks = {p["id"]: p["best_result_id"] for p in client.get("/api/state").json["products"]}
+    assert picks == {first["id"]: first_results[-1]["id"], second["id"]: second_result["id"]}
+    second_app = create_app({"DATA_DIR": studio_app.config["DATA_DIR"], "DISABLE_WORKERS": True})
+    try:
+        persisted = {p["id"]: p["best_result_id"] for p in second_app.test_client().get("/api/state").json["products"]}
+        assert persisted == picks
+        zipped = client.post("/api/download", json={"kind": "results", "ids": list(picks.values())})
+        with zipfile.ZipFile(io.BytesIO(zipped.data)) as archive:
+            assert len(archive.namelist()) == 2
+            assert all(Image.open(io.BytesIO(archive.read(name))).size == CANVAS for name in archive.namelist())
+        assert client.patch(endpoint, json={"result_id": None}).status_code == 200
+        assert next(p for p in client.get("/api/state").json["products"] if p["id"] == first["id"])["best_result_id"] is None
+    finally:
+        second_app.extensions["studio"].local.shutdown()
+        second_app.extensions["studio"].ai.shutdown()
+        second_app.extensions["studio"].composition.shutdown()

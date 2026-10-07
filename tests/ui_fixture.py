@@ -59,6 +59,12 @@ if not studio.rows("SELECT id FROM products"):
     composite_ids = [c["id"] for c in studio.rows("SELECT id FROM composites LIMIT 2")]
     response = client.post("/api/generate", json={"ids":composite_ids, "n":3})
     studio.run_job(response.json["job_id"])
+# Keep two backgrounds per product available for grouped gallery verification.
+for product in studio.rows("SELECT id FROM products WHERE deleted=0"):
+    targets=studio.rows("SELECT c.id FROM composites c WHERE c.product_id=? AND NOT EXISTS (SELECT 1 FROM results r WHERE r.composite_id=c.id) LIMIT 2", (product["id"],))
+    if targets:
+        response=client.post("/api/generate",json={"ids":[c["id"] for c in targets],"n":3})
+        studio.run_job(response.json["job_id"])
 app.config["DISABLE_WORKERS"] = False
 print("Disposable UI fixture → http://127.0.0.1:5001 (mock AI)", flush=True)
 serve(app,host="127.0.0.1",port=5001,threads=4)

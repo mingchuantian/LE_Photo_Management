@@ -31,10 +31,9 @@ def edit_images(path, n, root):
     if not key:
         raise ValueError("找不到 OpenAI key，请放入根目录 openai_key。")
     # Avoid automatic repeats of potentially billable requests after a timeout.
-    client = OpenAI(api_key=key, timeout=900, max_retries=0)
     settings = dict(SETTINGS)
     moderation = settings.pop("moderation")
-    with open(path, "rb") as image:
+    with OpenAI(api_key=key, timeout=900, max_retries=0) as client, open(path, "rb") as image:
         # Python SDK method is `edit` (singular). extra_body passes the exact
         # moderation setting even on SDK versions that do not expose it yet.
         response = client.images.edit(image=image, prompt=PROMPT, n=n,

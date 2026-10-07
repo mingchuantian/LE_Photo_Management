@@ -68,6 +68,10 @@ CREATE TABLE IF NOT EXISTS studio_meta (key TEXT PRIMARY KEY, value TEXT NOT NUL
 CREATE INDEX IF NOT EXISTS composite_product ON composites(product_id);
 CREATE INDEX IF NOT EXISTS result_composite ON results(composite_id);
 CREATE INDEX IF NOT EXISTS item_status ON job_items(status, ref_id);
+CREATE TABLE IF NOT EXISTS product_picks (
+ product_id TEXT PRIMARY KEY REFERENCES products(id),
+ result_id TEXT NOT NULL REFERENCES results(id)
+);
 """
 
 
@@ -81,7 +85,8 @@ class Studio:
         self.local = ThreadPoolExecutor(max_workers=1, thread_name_prefix="local-photo")
         self.compose_workers = max(1, min(8, int(app.config.get("COMPOSE_WORKERS", 4))))
         self.composition = ThreadPoolExecutor(max_workers=self.compose_workers, thread_name_prefix="template-photo")
-        self.ai = ThreadPoolExecutor(max_workers=2, thread_name_prefix="openai-photo")
+        self.ai_workers = 20
+        self.ai = ThreadPoolExecutor(max_workers=self.ai_workers, thread_name_prefix="openai-photo")
         self.schedule_lock = threading.Lock()
         with self.connect() as db:
             db.executescript(SCHEMA)
@@ -180,7 +185,10 @@ class Studio:
                         db.execute("UPDATE products SET status='queued',error=NULL,placement_confirmed=0,remove_provider=? WHERE id=?",
                                    (providers[ref], ref))
             if not self.app.config["DISABLE_WORKERS"]:
-                (self.ai if kind == "generate" else self.local).submit(self.run_job, identifier)
+                if kind == "generate":
+                    self.start_generation(identifier)
+                else:
+                    self.local.submit(self.run_job, identifier)
         return identifier
 
     def remove(self, product_id, provider="poof"):
@@ -295,28 +303,55 @@ class Studio:
     def run_job(self, job_id):
         job = self.one("SELECT * FROM jobs WHERE id=?", (job_id,))
         self.write("UPDATE jobs SET status='running' WHERE id=?", (job_id,))
+        if job["kind"] == "generate":
+            for future in as_completed(self.start_generation(job_id)):
+                future.result()
+            self.finish_job(job_id)
+            return
         for item in self.rows("SELECT * FROM job_items WHERE job_id=? AND status='queued'", (job_id,)):
-            self.write("UPDATE job_items SET status='running' WHERE id=?", (item["id"],))
-            try:
-                if job["kind"] == "remove":
-                    providers = json.loads(job["settings"] or "{}").get("providers", {})
-                    self.remove(item["ref_id"], providers.get(item["ref_id"], "poof"))
-                elif job["kind"] == "compose":
-                    self.compose_product(item["ref_id"])
-                elif job["kind"] == "restore":
-                    self.restore_result(item["ref_id"])
-                else:
-                    self.generate(item["ref_id"], job)
-                self.write("UPDATE job_items SET status='done',error=NULL WHERE id=?", (item["id"],))
-            except Exception as error:
-                message = self.safe_error(error)
-                self.write("UPDATE job_items SET status='error',error=? WHERE id=?", (message, item["id"]))
-                if job["kind"] == "remove":
-                    self.write("UPDATE products SET status='error',error=? WHERE id=?", (message, item["ref_id"]))
-        items = self.rows("SELECT status FROM job_items WHERE job_id=?", (job_id,))
-        failures = sum(item["status"] != "done" for item in items)
-        status = "done" if not failures else ("error" if failures == len(items) else "partial")
-        self.write("UPDATE jobs SET status=?,finished=? WHERE id=?", (status, now(), job_id))
+            self.run_item(job, item)
+        self.finish_job(job_id)
+
+    def start_generation(self, job_id):
+        # All batches share ONE pool. Coordinators never occupy API worker slots.
+        job = self.one("SELECT * FROM jobs WHERE id=?", (job_id,))
+        self.write("UPDATE jobs SET status='running' WHERE id=?", (job_id,))
+        return [self.ai.submit(self.run_item, job, item) for item in
+                self.rows("SELECT * FROM job_items WHERE job_id=? AND status='queued'", (job_id,))]
+
+    def run_item(self, job, item):
+        with self.connect() as db:
+            claimed = db.execute("UPDATE job_items SET status='running' WHERE id=? AND status='queued'", (item["id"],))
+            if not claimed.rowcount:
+                return
+        try:
+            if job["kind"] == "remove":
+                providers = json.loads(job["settings"] or "{}").get("providers", {})
+                self.remove(item["ref_id"], providers.get(item["ref_id"], "poof"))
+            elif job["kind"] == "compose":
+                self.compose_product(item["ref_id"])
+            elif job["kind"] == "restore":
+                self.restore_result(item["ref_id"])
+            else:
+                self.generate(item["ref_id"], job)
+            self.write("UPDATE job_items SET status='done',error=NULL WHERE id=?", (item["id"],))
+        except Exception as error:
+            message = self.safe_error(error)
+            self.write("UPDATE job_items SET status='error',error=? WHERE id=?", (message, item["id"]))
+            if job["kind"] == "remove":
+                self.write("UPDATE products SET status='error',error=? WHERE id=?", (message, item["ref_id"]))
+        self.finish_job(job["id"])
+
+    def finish_job(self, job_id):
+        # Decide and write in one transaction so simultaneous completions cannot
+        # leave a finished batch marked running or overwrite its final status.
+        with self.connect() as db:
+            items = db.execute("SELECT status FROM job_items WHERE job_id=?", (job_id,)).fetchall()
+            if any(item["status"] in {"queued", "running"} for item in items):
+                return
+            failures = sum(item["status"] != "done" for item in items)
+            status = "done" if not failures else ("error" if failures == len(items) else "partial")
+            db.execute("UPDATE jobs SET status=?,finished=? WHERE id=?", (status, now(), job_id))
 
 
 def create_app(config=None):
@@ -355,7 +390,7 @@ def create_app(config=None):
 
     @app.get("/api/state")
     def state():
-        products = studio.rows("SELECT * FROM products WHERE deleted=0 ORDER BY created DESC")
+        products = studio.rows("SELECT p.*,b.result_id best_result_id FROM products p LEFT JOIN product_picks b ON b.product_id=p.id WHERE p.deleted=0 ORDER BY p.created DESC")
         templates = studio.rows("SELECT * FROM templates WHERE deleted=0 ORDER BY created DESC")
         composites = studio.rows("""SELECT c.*,p.name product_name,t.name template_name,
             CASE WHEN p.revision=c.revision AND t.deleted=0 AND p.placement_confirmed=1 AND p.status='ready' THEN 1 ELSE 0 END active
@@ -377,6 +412,7 @@ def create_app(config=None):
                        removal_ready=bool(load_poof_key(ROOT)), removal_provider="poof",
                        photoroom_ready=bool(load_photoroom_key(ROOT)),
                        compose_workers=studio.compose_workers,
+                       ai_workers=studio.ai_workers,
                        sizes=SIZE_WIDTHS, baseline=BASELINE, canvas=CANVAS, settings=SETTINGS, prompt=PROMPT)
 
     def upload(kind):
@@ -526,6 +562,24 @@ def create_app(config=None):
         provider = body.get("provider", "poof")
         check_removal_key(provider)
         return jsonify(job_id=studio.queue("remove", identifiers, removal_providers={ref: provider for ref in identifiers})), 202
+
+    @app.patch("/api/products/<identifier>/best-result")
+    def pick_best_result(identifier):
+        require_rows("products", [identifier])
+        body = payload()
+        if "result_id" not in body:
+            raise ValueError("请选择一张成品。")
+        result_id = body["result_id"]
+        if result_id is None:
+            studio.write("DELETE FROM product_picks WHERE product_id=?", (identifier,))
+        else:
+            if not isinstance(result_id, str) or not studio.one(
+                "SELECT r.id FROM results r JOIN composites c ON c.id=r.composite_id WHERE r.id=? AND c.product_id=?",
+                (result_id, identifier)):
+                raise ValueError("成品不属于这个商品，请重新选择。")
+            studio.write("INSERT INTO product_picks VALUES (?,?) ON CONFLICT(product_id) DO UPDATE SET result_id=excluded.result_id",
+                         (identifier, result_id))
+        return jsonify(ok=True)
 
     def check_removal_key(provider):
         if provider not in ("poof", "photoroom"):

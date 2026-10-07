@@ -10,6 +10,7 @@
   <script defer src="{{ url_for('static', filename='app.js') }}"></script>
   <script defer src="{{ url_for('static', filename='combinations.js') }}"></script>
   <script defer src="{{ url_for('static', filename='placement.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='results.js') }}"></script>
 </head>
 <body>
   <svg class="svg-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -68,12 +69,12 @@
 
       <section id="view-results" class="view" hidden>
         <div class="page-heading"><div><div class="eyebrow">READY FOR THEIR CLOSE-UP</div><h1>挑选你的心动成片<span>。</span></h1><p>比较每一次生成，留下最适合商品的那一张。</p></div><button class="secondary" data-view="workspace">返回工作台 <svg><use href="#i-arrow"/></svg></button></div>
-        <div class="gallery-toolbar"><div class="toolbar-left"><button class="secondary small" id="select-results">全选成品</button><button class="quiet small" id="clear-results">取消选择</button><span id="result-total" class="muted"></span></div><div class="toolbar-right"><label class="sr-only" for="result-product">商品筛选</label><select id="result-product"><option value="all">所有商品</option></select><label class="sr-only" for="result-search">搜索成品</label><input id="result-search" type="search" placeholder="搜索商品或背景…"></div></div>
-        <div id="result-grid" class="image-grid"></div><div id="result-empty" class="empty-state"></div>
+        <div class="gallery-toolbar"><div class="toolbar-left"><button class="secondary small" id="select-results">选择所有最佳成品</button><button class="quiet small" id="clear-results">取消选择</button><span id="result-total" class="muted"></span></div><div class="toolbar-right"><label class="sr-only" for="result-product">商品筛选</label><select id="result-product"><option value="all">所有商品</option></select><label class="sr-only" for="result-search">搜索成品</label><input id="result-search" type="search" placeholder="搜索商品或背景…"></div></div>
+        <p class="muted">按上传原图分组。打开一个商品比较全部结果，标记最佳；每个商品的最佳选择会自动保存。</p><div id="result-grid" class="combination-groups"></div><div id="result-empty" class="empty-state"></div>
       </section>
     </main>
     <footer class="action-dock" id="generation-dock"><div class="dock-summary"><span class="dock-symbol"><svg><use href="#i-spark"/></svg></span><div><strong>已选择 <span id="selected-composite-count">0</span> 张合成图</strong><small id="generation-estimate">选中喜欢的组合，开始自然光影处理</small></div></div><div class="dock-controls"><button class="quiet" id="download-composites" disabled title="下载所选合成预览"><svg><use href="#i-download"/></svg>合成图</button><label for="generation-n">每张生成</label><select id="generation-n"></select><span>个结果</span><button class="primary" id="generate-button" disabled><svg><use href="#i-spark"/></svg>ChatGPT 处理</button></div></footer>
-    <footer class="action-dock" id="results-dock" hidden><div class="dock-summary"><span class="dock-symbol"><svg><use href="#i-check"/></svg></span><div><strong>已选择 <span id="selected-result-count">0</span> 张成品</strong><small>原商品细节已还原 · 1080 × 1350 PNG</small></div></div><button class="primary" id="download-results" disabled><svg><use href="#i-download"/></svg>打包下载所选成品</button></footer>
+    <footer class="action-dock" id="results-dock" hidden><div class="dock-summary"><span class="dock-symbol"><svg><use href="#i-check"/></svg></span><div><strong>已选择 <span id="selected-result-count">0</span> 张成品</strong><small>已为 <span id="best-result-count">0</span> 个商品选出最佳 · 1080 × 1350 PNG</small></div></div><div class="dock-controls"><button class="secondary" id="download-results" disabled>下载所选</button><button class="primary" id="download-best-results" disabled><svg><use href="#i-download"/></svg>打包下载每个商品最佳</button></div></footer>
   </div>
 
   <input id="products-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
@@ -109,6 +110,15 @@
     </div>
     <div class="placement-footer"><span id="placement-footer-note" class="muted"></span><div><button class="secondary" id="placement-next">确认并继续下一个</button><button class="primary" id="placement-confirm" disabled>确认并套用所有模板</button></div></div>
   </dialog>
+
+
+  <dialog id="product-results-dialog" class="combinations-dialog">
+    <div class="dialog-header"><div class="result-product-heading"><img id="result-original-thumb" alt="本商品上传原图"><div><span class="eyebrow">CHOOSE YOUR BEST</span><h2 id="product-results-title">比较商品成品</h2><p id="product-results-progress" class="muted"></p></div></div><button class="icon-button" data-close="product-results-dialog" aria-label="关闭成品选择"><svg><use href="#i-close"/></svg></button></div>
+    <div class="combinations-toolbar"><label class="sr-only" for="results-current-product">切换成品商品</label><select id="results-current-product"></select><button class="secondary small" id="results-previous-product">上一个商品</button><button class="secondary small" id="results-next-product">下一个商品</button><div class="combinations-search"><label class="sr-only" for="results-template-search">搜索本商品背景</label><input id="results-template-search" type="search" placeholder="搜索背景…"></div></div>
+    <div class="combinations-gallery"><div id="product-results-grid" class="image-grid"></div><div id="product-results-empty" class="empty-state" hidden></div></div>
+    <div class="combinations-footer"><div><strong id="product-best-label">尚未选择最佳</strong><small>最佳自动保存 · 每个商品一张</small></div><div class="combination-actions"><button class="secondary" id="results-compare" disabled>放大对比（0 / 2）</button><button class="secondary" id="clear-product-best">取消最佳</button><button class="primary" data-close="product-results-dialog">完成选择</button></div></div>
+  </dialog>
+  <dialog id="results-compare-dialog" class="result-compare-dialog"><div class="dialog-header"><div><span class="eyebrow">SIDE BY SIDE</span><h2>并排比较</h2></div><button class="icon-button" data-close="results-compare-dialog" aria-label="关闭并排比较"><svg><use href="#i-close"/></svg></button></div><div id="results-compare-content" class="result-compare-content"></div></dialog>
 
   <dialog id="inspector" class="inspector-dialog"><div class="dialog-header"><div><span class="eyebrow">IMAGE PIPELINE</span><h2 id="inspector-title">图片流程</h2></div><button class="icon-button" data-close="inspector" aria-label="关闭"><svg><use href="#i-close"/></svg></button></div><div class="inspector-layout"><div class="inspector-preview checker"><img id="inspector-image" alt="当前阶段图片"><div id="inspector-no-image">等待图片处理</div><button id="zoom-button" class="secondary small">查看原始尺寸</button></div><aside class="inspector-info"><div id="inspector-stages" class="stage-tabs"></div><div id="inspector-details"></div><div id="inspector-variants" class="variant-list"></div><a id="inspector-download" class="secondary" href="#"><svg><use href="#i-download"/></svg>下载当前图片</a></aside></div></dialog>
   <dialog id="lightbox" class="lightbox"><button class="icon-button" data-close="lightbox" aria-label="关闭"><svg><use href="#i-close"/></svg></button><img id="lightbox-image" alt="原始图片，点击或滚动查看细节"></dialog>

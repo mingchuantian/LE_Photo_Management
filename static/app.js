@@ -107,27 +107,21 @@ function renderTemplates() {
   $("template-empty").hidden = !!state.templates.length;
   $("template-grid").innerHTML = state.templates.map(t=>`<article class="image-card"><span class="card-badge">4:5</span><button class="image-button" data-inspect-template="${t.id}"><img loading="lazy" src="${media(t.file,true)}" alt="${escapeHTML(t.name)}"><span class="image-open">查看模板 ↗</span></button><div class="card-meta"><strong title="${escapeHTML(t.name)}">${escapeHTML(t.name)}</strong><div class="meta-row"><span>1080 × 1350</span></div></div><button class="template-delete" data-delete-template="${t.id}" aria-label="移除 ${escapeHTML(t.name)}">${icon("trash")}</button></article>`).join("");
 }
-function renderResults() {
-  const results = visibleResults();
-  $("result-total").textContent = `共 ${results.length} 张成品`;
-  $("result-grid").innerHTML = results.map(r=>`<article class="image-card ${selectedResults.has(r.id) ? "selected" : ""}"><button class="select-mark" data-select-result="${r.id}" aria-label="选择 ${escapeHTML(r.product_name)} 成品 ${r.variant}" aria-pressed="${selectedResults.has(r.id)}">${icon("check")}</button><span class="card-badge">结果 ${r.variant} · ${r.size}</span><button class="image-button" data-inspect-result="${r.id}"><img loading="lazy" src="${media(r.file,true)}" alt="${escapeHTML(r.product_name)} · 结果 ${r.variant}"><span class="image-open">查看图片流程 ↗</span></button><div class="card-meta"><strong title="${escapeHTML(r.product_name)}">${escapeHTML(r.product_name)}</strong><div class="meta-row"><span title="${escapeHTML(r.template_name)}">${escapeHTML(r.template_name)}</span><span>${r.width} × ${r.height}</span></div></div></article>`).join("");
-  $("result-empty").hidden = !!results.length;
-  empty($("result-empty"), state.results.length ? "没有符合条件的成品" : "你的下一张好照片，从这里开始", state.results.length ? "试试其他商品或搜索词。" : "在批量工作台选择合成预览，点击 ChatGPT 处理。生成完成后，所有结果会自动保存到这里。", state.results.length ? "" : `<button class="secondary small" data-view="workspace">前往批量工作台 ${icon("arrow")}</button>`, "spark");
-  $("select-results").disabled = !results.length;
-  renderDock();
-}
+function renderResults() { renderGroupedResults(); }
 function renderDock() {
   $("generation-dock").hidden = view !== "workspace";
   $("results-dock").hidden = view !== "results";
   $("selected-composite-count").textContent = selectedComposites.size;
   const n = Number($("generation-n").value || 3);
-  $("generation-estimate").textContent = selectedComposites.size ? `${selectedComposites.size} 个组合 × ${n} 个结果 = ${selectedComposites.size*n} 张成品 · 通过 OpenAI API 生成` : "选中喜欢的组合，开始自然光影处理";
+  $("generation-estimate").textContent = selectedComposites.size ? `${selectedComposites.size} 个组合 × ${n} 个结果 = ${selectedComposites.size*n} 张成品 · 最多 ${state.ai_workers || 20} 张同时处理` : "选中喜欢的组合，开始自然光影处理";
   const eligible = [...selectedComposites].filter(id=>!busyCompositeIds().has(id));
   $("generate-button").disabled = !eligible.length || submitting || !state.key_ready;
   $("generate-button").title = state.key_ready ? "" : "请在根目录放入 openai_key";
   $("download-composites").disabled = !selectedComposites.size;
   $("selected-result-count").textContent = selectedResults.size;
   $("download-results").disabled = !selectedResults.size;
+  $("download-best-results").disabled = !state.products.some(p=>p.best_result_id);
+  $("best-result-count").textContent = state.products.filter(p=>p.best_result_id).length;
   if (typeof renderCombinationSelection === "function") renderCombinationSelection();
 }
 function switchView(next) {
@@ -236,7 +230,7 @@ function renderJobs() {
   }).join("") : `<p class="muted">任务会在这里记录。上传第一张商品照片开始吧。</p>`;
 }
 function showSettings() {
-  $("settings-content").innerHTML=`<p class="muted">已保留你的 Playground 配方，只有每张生成数量在工作台动态选择。</p><table class="settings-table"><tbody>${Object.entries(state.settings || {}).map(([k,v])=>`<tr><td>${escapeHTML(k)}</td><td>${escapeHTML(v)}</td></tr>`).join("")}<tr><td>n</td><td>1–10，默认 3</td></tr></tbody></table><div class="detail-label">你的原始 Prompt</div><div class="prompt-text">${escapeHTML(state.prompt)}</div><div class="detail-label">五档尺寸 · 画布宽度</div><div class="settings-sizes">${Object.entries(state.sizes).map(([k,v])=>`<span>${k} ${percent(v)}%</span>`).join("")}</div><p class="muted">默认商品最底部距离背景底部约 12.5%（1/8），水平居中。单模板预览支持拖动、缩放、旋转和精确位置调整；确认后套用所有模板。五档按可见商品宽度计算；过高商品默认等比缩小。AI 返回后，先将背景统一为 1080 × 1350，再按生成前的原位置、原尺寸覆盖原商品。AI 原始结果保留在单图流程中供比较。</p><p class="muted">抠图使用 Poof Background Removal API。${state.removal_ready ? "已读取本地 Poof key。" : "请在根目录放入 poof.bg_key。"}商品卡片和单图流程中都可选择 Poof 或 Photoroom 重新抠图。${state.photoroom_ready ? "已读取本地 Photoroom key。" : "使用 Photoroom 需在根目录放入 photoroom_key。"}重新抠图使用保存的原始照片。</p><p class="muted">${state.key_ready ? "已读取本地 OpenAI key。" : "请把 OpenAI key 放在项目根目录的 openai_key 文件。"}生成调用在本地服务端完成。</p>`;
+  $("settings-content").innerHTML=`<p class="muted">已保留你的 Playground 配方，只有每张生成数量在工作台动态选择。</p><table class="settings-table"><tbody>${Object.entries(state.settings || {}).map(([k,v])=>`<tr><td>${escapeHTML(k)}</td><td>${escapeHTML(v)}</td></tr>`).join("")}<tr><td>n</td><td>1–10，默认 3</td></tr></tbody></table><div class="detail-label">你的原始 Prompt</div><div class="prompt-text">${escapeHTML(state.prompt)}</div><div class="detail-label">五档尺寸 · 画布宽度</div><div class="settings-sizes">${Object.entries(state.sizes).map(([k,v])=>`<span>${k} ${percent(v)}%</span>`).join("")}</div><p class="muted">默认商品最底部距离背景底部约 12.5%（1/8），水平居中。单模板预览支持拖动、缩放、旋转和精确位置调整；确认后套用所有模板。五档按可见商品宽度计算；过高商品默认等比缩小。AI 返回后，先将背景统一为 1080 × 1350，再按生成前的原位置、原尺寸覆盖原商品。AI 原始结果保留在单图流程中供比较。</p><p class="muted">抠图使用 Poof Background Removal API。${state.removal_ready ? "已读取本地 Poof key。" : "请在根目录放入 poof.bg_key。"}商品卡片和单图流程中都可选择 Poof 或 Photoroom 重新抠图。${state.photoroom_ready ? "已读取本地 Photoroom key。" : "使用 Photoroom 需在根目录放入 photoroom_key。"}重新抠图使用保存的原始照片。</p><p class="muted">${state.key_ready ? "已读取本地 OpenAI key。" : "请把 OpenAI key 放在项目根目录的 openai_key 文件。"}生成调用在本地服务端完成，所有批次合计最多 20 个请求同时运行。</p>`;
   $("settings-dialog").showModal();
 }
 
@@ -324,5 +318,5 @@ $("zoom-button").onclick=()=> { $("lightbox-image").src=$("inspector-image").src
 $("confirm-ok").onclick=()=>finishConfirm(true); $("confirm-cancel").onclick=()=>finishConfirm(false);
 $("confirm-dialog").addEventListener("cancel",e=> { e.preventDefault(); finishConfirm(false); });
 for(const dialog of document.querySelectorAll("dialog")) dialog.addEventListener("click",e=> { if(e.target===dialog) { const r=dialog.getBoundingClientRect(); if(e.clientX<r.left || e.clientX>r.right || e.clientY<r.top || e.clientY>r.bottom) dialog=== $("confirm-dialog") ? finishConfirm(false) : dialog.close(); } });
-refresh(true);
+document.addEventListener("DOMContentLoaded",()=>refresh(true),{once:true});
 setInterval(()=>refresh(),2500);
